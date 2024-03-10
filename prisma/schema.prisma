@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Video {
+  id                   String                 @id @db.Uuid
+  creatorId            String                 @map("creator_id")
+  originalFileName     String                 @map("original_filename")
+  videoFileUrl         String                 @map("video_file_url")
+  width                Int
+  height               Int
+  status               VideoProcessingStatus
+  availableDate        DateTime               @default(now()) @map("available_date") @db.Timestamptz(6)
+  processedDate        DateTime?              @map("processed_date") @db.Timestamptz(6)
+  retryCount           Int                    @map("retry_count")
+  lockVersion          Int                    @map("lock_version")
+  PreviewThumbnail     VideoPreviewThumbnail?
+  ProcessedVideos      ProcessedVideo[]
+  VideoProcessingSteps VideoProcessingStep[]
+  VideoThumbnails      VideoThumbnail[]
+
+  @@index([creatorId], type: Hash)
+  @@map("videos")
+}
+
+enum VideoProcessingStatus {
+  Pending
+  ProcessingThumbnails
+  ProcessingVideos
+  Processed
+  Failed
+
+  @@map("video_processing_statuses")
+}
+
+model VideoPreviewThumbnail {
+  videoId     String @id @map("video_id") @db.Uuid
+  video       Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  imageFileId String @map("image_file_id") @db.Uuid
+  url         String
+
+  @@map("video_preview_thumbnails")
+}
+
+model ProcessedVideo {
+  id          String @id @default(uuid()) @db.Uuid
+  videoFileId String @map("video_file_id") @db.Uuid
+  label       String
+  url         String
+  videoId     String @map("video_id") @db.Uuid
+  video       Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId], type: Hash)
+  @@map("processed_videos")
+}
+
+model VideoProcessingStep {
+  id       String  @id @default(uuid()) @db.Uuid
+  label    String
+  width    Int
+  height   Int
+  bitrate  Int
+  complete Boolean
+  videoId  String  @map("video_id") @db.Uuid
+  video    Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId], type: Hash)
+  @@map("video_processing_steps")
+}
+
+model VideoThumbnail {
+  id          String @id @default(uuid()) @db.Uuid
+  imageFileId String @map("image_file_id") @db.Uuid
+  label       String
+  url         String
+  videoId     String @map("video_id") @db.Uuid
+  video       Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId], type: Hash)
+  @@map("video_thumbnails")
+}
