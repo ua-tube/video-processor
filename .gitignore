@@ -34,8 +34,8 @@ lerna-debug.log*
 !.vscode/launch.json
 !.vscode/extensions.json
 
-# tmp
-/.tmp
+# processor output
+/processor_output
 
 # env
 .env

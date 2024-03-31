@@ -18,6 +18,7 @@ import { ProcessorModule } from './processor/processor.module';
         STORAGE_BASE_URL: Joi.string().required(),
         DATABASE_URL: Joi.string().required(),
         HWACCEL_ENABLED: Joi.boolean().required(),
+        GPU_VENDOR: Joi.valid('nvidia', 'apple', 'intel', 'amd', 'other').required()
       }),
     }),
     ProcessorModule,

@@ -4,22 +4,18 @@ export const VideoProcessorConfiguration = {
 };
 
 export const GeneratorConfiguration = {
-  device: 0,
-  hardwareAcceleration: {
-    hardwareAccelerator: 'auto',
-    decoder: 'h264_cuvid',
-    encoder: 'h264_nvenc',
-  },
+  hardwareAccelerator: 'auto',
+  hardwareAccelerationEncoder: {
+    nvidia: 'h264_nvenc',
+    appleSilicon: 'h264_videotoolbox',
+  }
 };
 
-export const ThumbnailConfiguration = {
-  thumbnailHeight: 360,
-  thumbnailPositions: [
-    { seconds: 5 },
-    { timePercentage: 0.15 },
-    { timePercentage: 0.3 },
-  ],
-};
+export const PreviewConfiguration = {
+  previewThumbnailHeight: 320,
+  previewThumbnailStartPosition: 0.33,
+  previewThumbnailLengthSeconds: 3.0
+}
 
 export const VideoProcessingSteps = [
   { label: '144p', height: 144, bitrate: 600 },
