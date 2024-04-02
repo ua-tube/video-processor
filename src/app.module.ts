@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import Joi from 'joi';
 import { ProcessorModule } from './processor/processor.module';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { LoggingInterceptor } from './common/interceptors';
 
 @Module({
   imports: [
@@ -18,12 +20,22 @@ import { ProcessorModule } from './processor/processor.module';
         STORAGE_BASE_URL: Joi.string().required(),
         DATABASE_URL: Joi.string().required(),
         HWACCEL_ENABLED: Joi.boolean().required(),
-        GPU_VENDOR: Joi.valid('nvidia', 'apple', 'intel', 'amd', 'other').required()
+        GPU_VENDOR: Joi.valid(
+          'nvidia',
+          'apple',
+          'intel',
+          'amd',
+          'other',
+        ).required(),
       }),
     }),
     ProcessorModule,
   ],
-  controllers: [],
-  providers: [],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
+  ],
 })
 export class AppModule {}

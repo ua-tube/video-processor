@@ -22,6 +22,7 @@ async function bootstrap() {
   app.use(helmet.hidePoweredBy());
   app.use(helmet.contentSecurityPolicy());
   app.setGlobalPrefix('/api');
+  app.enableShutdownHooks();
 
   const configService = app.get(ConfigService);
 

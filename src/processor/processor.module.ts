@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma';
-import { ProcessorController } from './processor.controller';
+import { ProcessorController, HealthController } from './controllers';
 import { ProcessorService } from './processor.service';
 import { BullModule } from '@nestjs/bull';
 import { ConfigService } from '@nestjs/config';
@@ -36,7 +36,7 @@ import { VIDEO_MANAGER_SVC } from './constants';
       },
     ]),
   ],
-  controllers: [ProcessorController],
+  controllers: [ProcessorController, HealthController],
   providers: [ProcessorService, Processor],
 })
 export class ProcessorModule {}

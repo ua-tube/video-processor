@@ -8,14 +8,14 @@ export const GeneratorConfiguration = {
   hardwareAccelerationEncoder: {
     nvidia: 'h264_nvenc',
     appleSilicon: 'h264_videotoolbox',
-  }
+  },
 };
 
 export const PreviewConfiguration = {
   previewThumbnailHeight: 320,
   previewThumbnailStartPosition: 0.33,
-  previewThumbnailLengthSeconds: 3.0
-}
+  previewThumbnailLengthSeconds: 3.0,
+};
 
 export const VideoProcessingSteps = [
   { label: '144p', height: 144, bitrate: 600 },

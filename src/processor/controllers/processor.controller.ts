@@ -1,6 +1,6 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller } from '@nestjs/common';
 import { EventPattern, Payload } from '@nestjs/microservices';
-import { VideoProcessPayload } from './types';
+import { VideoProcessPayload } from '../types';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 
@@ -10,11 +10,6 @@ export class ProcessorController {
     @InjectQueue('processor')
     private readonly processorQueue: Queue,
   ) {}
-
-  @Get('health')
-  ping() {
-    return "pong"
-  }
 
   @EventPattern('process_video')
   async handleVideoProcess(@Payload() payload: VideoProcessPayload) {

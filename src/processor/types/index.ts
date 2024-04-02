@@ -1,1 +1,1 @@
-export * from './video-process-payload.type'
+export * from './video-process-payload.type';

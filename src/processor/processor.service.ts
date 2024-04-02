@@ -1,4 +1,9 @@
-import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { createReadStream, createWriteStream } from 'node:fs';
@@ -8,14 +13,26 @@ import { finished } from 'stream';
 import { promisify } from 'util';
 import ffmpeg from 'fluent-ffmpeg';
 import { VideoProcessPayload } from './types';
-import { GeneratorConfiguration, PreviewConfiguration, VideoProcessingSteps } from './config';
+import {
+  GeneratorConfiguration,
+  PreviewConfiguration,
+  VideoProcessingSteps,
+} from './config';
 import { PrismaService } from '../prisma';
 import { VideoProcessingStep } from '@prisma/client';
 import FormData from 'form-data';
 import { randomUUID } from 'node:crypto';
-import { SERVICE_UPLOADED_THUMBNAIL, SERVICE_UPLOADED_VIDEO, VIDEO_MANAGER_SVC } from './constants';
+import {
+  SERVICE_UPLOADED_THUMBNAIL,
+  SERVICE_UPLOADED_VIDEO,
+  VIDEO_MANAGER_SVC,
+} from './constants';
 import { ClientRMQ } from '@nestjs/microservices';
-import { AddPreviewEvent, AddProcessedVideoEvent, AddThumbnailEvent } from './events';
+import {
+  AddPreviewEvent,
+  AddProcessedVideoEvent,
+  AddThumbnailEvent,
+} from './events';
 import { lastValueFrom } from 'rxjs';
 
 const streamFinished = promisify(finished);
@@ -29,8 +46,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     private readonly configService: ConfigService,
     @Inject(VIDEO_MANAGER_SVC)
     private readonly videoManagerClient: ClientRMQ,
-  ) {
-  }
+  ) {}
 
   onApplicationBootstrap(): void {
     this.videoManagerClient
@@ -72,11 +88,15 @@ export class ProcessorService implements OnApplicationBootstrap {
       Video file url: ${payload.videoUrl}`,
     );
 
-    await lastValueFrom(this.videoManagerClient.send('set_processing_status', {
-      videoId: payload.videoId,
-      status: 'VideoBeingProcessed'
-    }))
-    this.logger.log(`Video (${payload.videoId}) processing status set to VideoBeingProcessed`)
+    await lastValueFrom(
+      this.videoManagerClient.send('set_processing_status', {
+        videoId: payload.videoId,
+        status: 'VideoBeingProcessed',
+      }),
+    );
+    this.logger.log(
+      `Video (${payload.videoId}) processing status set to VideoBeingProcessed`,
+    );
 
     await Promise.allSettled([
       this.processVideo(payload, filePath, outputFolderPath, videoStream),
@@ -84,15 +104,19 @@ export class ProcessorService implements OnApplicationBootstrap {
       this.processThumbnail(payload, filePath, folderId, videoStream),
     ])
       .then(() => {
-        this.logger.log(`Emit publish_video for videoId (${payload.videoId})`)
-        this.videoManagerClient.emit('publish_video', { videoId: payload.videoId })
+        this.logger.log(`Emit publish_video for videoId (${payload.videoId})`);
+        this.videoManagerClient.emit('publish_video', {
+          videoId: payload.videoId,
+        });
       })
       .catch(async (e) => {
-        this.logger.error(e)
-        await lastValueFrom(this.videoManagerClient.send('set_processing_status', {
-          videoId: payload.videoId,
-          status: 'VideoProcessingFailed'
-        }))
+        this.logger.error(e);
+        await lastValueFrom(
+          this.videoManagerClient.send('set_processing_status', {
+            videoId: payload.videoId,
+            status: 'VideoProcessingFailed',
+          }),
+        );
       })
       .finally(async () => await this.removeTempFileOrFolder(outputFolderPath));
   }
@@ -119,7 +143,12 @@ export class ProcessorService implements OnApplicationBootstrap {
     return { filePath, outputFolderPath, folderId: split[0] };
   }
 
-  private async uploadFile(filePath: string, type: 'videos' | 'images', groupId: string, category: string) {
+  private async uploadFile(
+    filePath: string,
+    type: 'videos' | 'images',
+    groupId: string,
+    category: string,
+  ) {
     const formData = new FormData();
 
     const stream = createReadStream(filePath);
@@ -128,7 +157,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     const videoId = randomUUID();
     const { data } = await axios.post(
       this.configService.get<string>('STORAGE_BASE_URL') +
-      `/api/v1/storage/${type}/internal`,
+        `/api/v1/storage/${type}/internal`,
       formData,
       {
         headers: {
@@ -209,13 +238,17 @@ export class ProcessorService implements OnApplicationBootstrap {
                   outputFilePath,
                   'videos',
                   s.videoId,
-                  SERVICE_UPLOADED_VIDEO);
+                  SERVICE_UPLOADED_VIDEO,
+                );
                 this.logger.log(`Video ${s.label} uploaded to storage.`);
                 await this.removeTempFileOrFolder(outputFilePath);
-                this.logger.log(`Emit add_processed_video for video (${s.videoId})`);
+                this.logger.log(
+                  `Emit add_processed_video for video (${s.videoId})`,
+                );
                 this.videoManagerClient.emit(
                   'add_processed_video',
-                  new AddProcessedVideoEvent(id, s.videoId, url, s.label));
+                  new AddProcessedVideoEvent(id, s.videoId, url, s.label),
+                );
                 resolve(true);
               })
               .run();
@@ -240,22 +273,47 @@ export class ProcessorService implements OnApplicationBootstrap {
     return new Promise(async (resolve, reject) => {
       try {
         const thumbnailId = randomUUID();
-        const outputThumbnailPath = join(process.cwd(), 'processor_output', folderId, thumbnailId + '.webp');
+        const outputThumbnailPath = join(
+          process.cwd(),
+          'processor_output',
+          folderId,
+          thumbnailId + '.webp',
+        );
 
-        const height = Math.min(videoStream.height, PreviewConfiguration.previewThumbnailHeight);
-        let width = Math.ceil(height * (videoStream.width / videoStream.height));
+        const height = Math.min(
+          videoStream.height,
+          PreviewConfiguration.previewThumbnailHeight,
+        );
+        let width = Math.ceil(
+          height * (videoStream.width / videoStream.height),
+        );
         width = Math.ceil((width / 2.0) * 2.0);
 
-        let startPositionSeconds = +videoStream.duration * PreviewConfiguration.previewThumbnailStartPosition;
-        const lengthSeconds = Math.min(+videoStream.duration, PreviewConfiguration.previewThumbnailLengthSeconds);
-        if (+videoStream.duration - startPositionSeconds < PreviewConfiguration.previewThumbnailLengthSeconds) {
+        let startPositionSeconds =
+          +videoStream.duration *
+          PreviewConfiguration.previewThumbnailStartPosition;
+        const lengthSeconds = Math.min(
+          +videoStream.duration,
+          PreviewConfiguration.previewThumbnailLengthSeconds,
+        );
+        if (
+          +videoStream.duration - startPositionSeconds <
+          PreviewConfiguration.previewThumbnailLengthSeconds
+        ) {
           startPositionSeconds = 0.0;
         }
 
         await new Promise((resolve, reject) => {
           ffmpeg(filePath)
             .inputOption(this.buildInputOption())
-            .outputOption(this.buildPreviewOutputOption(width, height, startPositionSeconds, lengthSeconds))
+            .outputOption(
+              this.buildPreviewOutputOption(
+                width,
+                height,
+                startPositionSeconds,
+                lengthSeconds,
+              ),
+            )
             .output(outputThumbnailPath)
             .on('error', (err: any) => {
               reject(err);
@@ -268,13 +326,17 @@ export class ProcessorService implements OnApplicationBootstrap {
                 outputThumbnailPath,
                 'images',
                 payload.videoId,
-                SERVICE_UPLOADED_THUMBNAIL);
-              this.logger.log(`Video preview to video (${payload.videoId}) uploaded to storage.`);
+                SERVICE_UPLOADED_THUMBNAIL,
+              );
+              this.logger.log(
+                `Video preview to video (${payload.videoId}) uploaded to storage.`,
+              );
               await this.removeTempFileOrFolder(outputThumbnailPath);
               this.logger.log(`Emit add_preview to video (${payload.videoId})`);
               this.videoManagerClient.emit(
                 'add_preview',
-                new AddPreviewEvent(id, url, payload.videoId));
+                new AddPreviewEvent(id, url, payload.videoId),
+              );
               resolve(true);
             })
             .run();
@@ -296,9 +358,15 @@ export class ProcessorService implements OnApplicationBootstrap {
   ) {
     return new Promise(async (resolve, reject) => {
       try {
-        const outputFilePath = join(process.cwd(), 'processor_output', folderId);
+        const outputFilePath = join(
+          process.cwd(),
+          'processor_output',
+          folderId,
+        );
         const height = Math.min(videoStream.height, 360);
-        let width = Math.ceil(height * (videoStream.width / videoStream.height));
+        let width = Math.ceil(
+          height * (videoStream.width / videoStream.height),
+        );
         width = Math.ceil((width / 2.0) * 2.0);
 
         await new Promise((resolve, reject) => {
@@ -324,7 +392,9 @@ export class ProcessorService implements OnApplicationBootstrap {
                 thumbnails.push({ imageFileId: id, url });
               }
               this.logger.log(`Thumbnails uploaded to storage.`);
-              this.logger.log(`Emit add_thumbnails to video (${payload.videoId})`);
+              this.logger.log(
+                `Emit add_thumbnails to video (${payload.videoId})`,
+              );
               this.videoManagerClient.emit(
                 'add_thumbnails',
                 new AddThumbnailEvent(payload.videoId, thumbnails),
@@ -352,15 +422,17 @@ export class ProcessorService implements OnApplicationBootstrap {
     const args: string[] = [];
 
     if (this.configService.get<boolean>('HWACCEL_ENABLED')) {
-      args.push(
-        `-hwaccel ${GeneratorConfiguration.hardwareAccelerator}`,
-      );
+      args.push(`-hwaccel ${GeneratorConfiguration.hardwareAccelerator}`);
     }
 
     return args;
   }
 
-  private buildTranscodeOutputOption(width: number, height: number, bitrate: number) {
+  private buildTranscodeOutputOption(
+    width: number,
+    height: number,
+    bitrate: number,
+  ) {
     const args: string[] = [];
 
     args.push(`-s ${width}x${height}`);
@@ -371,7 +443,12 @@ export class ProcessorService implements OnApplicationBootstrap {
     return args;
   }
 
-  private buildPreviewOutputOption(width: number, height: number, startPositionSeconds: number, lengthSeconds: number) {
+  private buildPreviewOutputOption(
+    width: number,
+    height: number,
+    startPositionSeconds: number,
+    lengthSeconds: number,
+  ) {
     const args: string[] = [];
 
     args.push(`-s ${width}x${height}`);
@@ -394,7 +471,6 @@ export class ProcessorService implements OnApplicationBootstrap {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
   }
 
-
   private getHwaccelEncoder() {
     const hwaccelEnabled = this.configService.get<boolean>('HWACCEL_ENABLED');
 
@@ -402,7 +478,8 @@ export class ProcessorService implements OnApplicationBootstrap {
       const vendorName = this.configService.get('GPU_VENDOR');
       switch (vendorName) {
         case 'apple':
-          return GeneratorConfiguration.hardwareAccelerationEncoder.appleSilicon;
+          return GeneratorConfiguration.hardwareAccelerationEncoder
+            .appleSilicon;
         case 'nvidia':
           return GeneratorConfiguration.hardwareAccelerationEncoder.nvidia;
         case 'intel':
