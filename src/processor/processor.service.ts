@@ -279,6 +279,8 @@ export class ProcessorService implements OnApplicationBootstrap {
         } catch (e) {
           this.logger.error(e);
           reject(e);
+        } finally {
+          this.runningCommands.delete(`v-${s.videoId}-${s.label}`);
         }
       }
 
@@ -372,6 +374,8 @@ export class ProcessorService implements OnApplicationBootstrap {
         this.logger.error(e);
         this.videoManagerClient.emit('preview_generate_failed', payload);
         reject(e);
+      } finally {
+        this.runningCommands.delete(`v-${payload.videoId}-preview`);
       }
     });
   }
@@ -442,6 +446,8 @@ export class ProcessorService implements OnApplicationBootstrap {
         this.logger.error(e);
         this.videoManagerClient.emit('thumbnails_generate_failed', payload);
         reject(e);
+      } finally {
+        this.runningCommands.delete(`v-${payload.videoId}-thumbnails`);
       }
       resolve(true);
     });
