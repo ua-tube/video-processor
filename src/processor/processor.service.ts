@@ -34,18 +34,24 @@ import {
   AddThumbnailEvent,
 } from './events';
 import { lastValueFrom } from 'rxjs';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+import { OnEvent } from '@nestjs/event-emitter';
 
 const streamFinished = promisify(finished);
 
 @Injectable()
 export class ProcessorService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProcessorService.name);
+  private runningCommands = new Map();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     @Inject(VIDEO_MANAGER_SVC)
     private readonly videoManagerClient: ClientRMQ,
+    @Inject(CACHE_MANAGER)
+    private readonly cacheManager: Cache,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -58,6 +64,11 @@ export class ProcessorService implements OnApplicationBootstrap {
   }
 
   async videoProcess(payload: VideoProcessPayload) {
+    const videoProcessingStatus = await this.cacheManager.get(
+      `v-${payload.videoId}-status`,
+    );
+    if (videoProcessingStatus && videoProcessingStatus === 'canceled') return;
+
     const { filePath, outputFolderPath, folderId } = await this.downloadVideo(
       payload.videoUrl,
     );
@@ -213,11 +224,21 @@ export class ProcessorService implements OnApplicationBootstrap {
         );
       }
 
+      await this.cacheManager.set(`v-${payload.videoId}-status`, 'work');
+
       for (const s of processingSteps) {
+        const videoProcessorStatus = await this.cacheManager.get(
+          `v-${payload.videoId}-status`,
+        );
+        if (videoProcessorStatus === 'canceled') {
+          return;
+        }
+
         try {
           const outputFilePath = join(outputFolderPath, `${s.label}.mp4`);
           await new Promise((resolve, reject) => {
-            ffmpeg(filePath)
+            const cmd = ffmpeg(filePath);
+            cmd
               .inputOption(this.buildInputOption())
               .outputOption(
                 this.buildTranscodeOutputOption(s.width, s.height, s.bitrate),
@@ -252,6 +273,8 @@ export class ProcessorService implements OnApplicationBootstrap {
                 resolve(true);
               })
               .run();
+
+            this.runningCommands.set(`v-${s.videoId}-${s.label}`, cmd);
           });
         } catch (e) {
           this.logger.error(e);
@@ -304,7 +327,8 @@ export class ProcessorService implements OnApplicationBootstrap {
         }
 
         await new Promise((resolve, reject) => {
-          ffmpeg(filePath)
+          const cmd = ffmpeg(filePath);
+          cmd
             .inputOption(this.buildInputOption())
             .outputOption(
               this.buildPreviewOutputOption(
@@ -340,6 +364,8 @@ export class ProcessorService implements OnApplicationBootstrap {
               resolve(true);
             })
             .run();
+
+          this.runningCommands.set(`v-${payload.videoId}-preview`, cmd);
         });
         resolve(true);
       } catch (e) {
@@ -370,7 +396,8 @@ export class ProcessorService implements OnApplicationBootstrap {
         width = Math.ceil((width / 2.0) * 2.0);
 
         await new Promise((resolve, reject) => {
-          ffmpeg(filePath)
+          const cmd = ffmpeg(filePath);
+          cmd
             .on('error', (err: any) => {
               reject(err);
             })
@@ -408,6 +435,8 @@ export class ProcessorService implements OnApplicationBootstrap {
               size: `${width}x${height}`,
               timemarks: ['10%', '25%', '50%'],
             });
+
+          this.runningCommands.set(`v-${payload.videoId}-thumbnails`, cmd);
         });
       } catch (e) {
         this.logger.error(e);
@@ -492,5 +521,24 @@ export class ProcessorService implements OnApplicationBootstrap {
 
   private async removeTempFileOrFolder(path: string) {
     await rm(path, { recursive: true, force: true });
+  }
+
+  @OnEvent('cancel-processor', { async: true, promisify: true })
+  async handleStopProcessor(payload: { videoId: string }) {
+    const commands = [...this.runningCommands].filter((x) =>
+      x[0].startsWith(`v-${payload.videoId}`),
+    );
+
+    commands.forEach((cmd) => {
+      cmd[1].kill('SIGKILL');
+      this.runningCommands.delete(cmd[0]);
+    });
+
+    await Promise.all([
+      this.prisma.video.delete({ where: { id: payload.videoId } }),
+      this.removeTempFileOrFolder(
+        join(process.cwd(), 'processor_output', payload.videoId),
+      ),
+    ]);
   }
 }
