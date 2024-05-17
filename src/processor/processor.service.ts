@@ -19,7 +19,7 @@ import {
   VideoProcessingSteps,
 } from './config';
 import { PrismaService } from '../prisma';
-import { VideoProcessingStep } from '@prisma/client';
+import { VideoProcessingStatus, VideoProcessingStep } from '@prisma/client';
 import FormData from 'form-data';
 import { randomUUID } from 'node:crypto';
 import {
@@ -37,6 +37,7 @@ import { lastValueFrom } from 'rxjs';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { OnEvent } from '@nestjs/event-emitter';
+import { CancelProcessVideoDto } from './dto';
 
 const streamFinished = promisify(finished);
 
@@ -87,8 +88,6 @@ export class ProcessorService implements OnApplicationBootstrap {
         width: videoStream.width,
         height: videoStream.height,
         status: 'Pending',
-        lockVersion: 0,
-        retryCount: 0,
       },
     });
 
@@ -109,27 +108,33 @@ export class ProcessorService implements OnApplicationBootstrap {
       `Video (${payload.videoId}) processing status set to VideoBeingProcessed`,
     );
 
-    await Promise.allSettled([
-      this.processVideo(payload, filePath, outputFolderPath, videoStream),
-      this.processPreview(payload, filePath, folderId, videoStream),
-      this.processThumbnail(payload, filePath, folderId, videoStream),
-    ])
-      .then(() => {
-        this.logger.log(`Emit publish_video for videoId (${payload.videoId})`);
-        this.videoManagerClient.emit('publish_video', {
+    try {
+      await Promise.all([
+        this.updateVideoStatus(payload.videoId, 'ProcessingThumbnails'),
+        this.processPreview(payload, filePath, folderId, videoStream),
+        this.processThumbnail(payload, filePath, folderId, videoStream),
+      ]);
+
+      await Promise.all([
+        this.updateVideoStatus(payload.videoId, 'ProcessingVideos'),
+        this.processVideo(payload, filePath, outputFolderPath, videoStream),
+      ]);
+
+      this.logger.log(`Emit publish_video for videoId (${payload.videoId})`);
+      this.videoManagerClient.emit('publish_video', {
+        videoId: payload.videoId,
+      });
+    } catch (e) {
+      this.logger.error(e);
+      await lastValueFrom(
+        this.videoManagerClient.send('set_processing_status', {
           videoId: payload.videoId,
-        });
-      })
-      .catch(async (e) => {
-        this.logger.error(e);
-        await lastValueFrom(
-          this.videoManagerClient.send('set_processing_status', {
-            videoId: payload.videoId,
-            status: 'VideoProcessingFailed',
-          }),
-        );
-      })
-      .finally(async () => await this.removeTempFileOrFolder(outputFolderPath));
+          status: 'VideoProcessingFailed',
+        }),
+      );
+    }
+
+    await this.removeTempFileOrFolder(outputFolderPath);
   }
 
   private async downloadVideo(videoUrl: string) {
@@ -529,8 +534,21 @@ export class ProcessorService implements OnApplicationBootstrap {
     await rm(path, { recursive: true, force: true });
   }
 
+  private async updateVideoStatus(
+    videoId: string,
+    status: VideoProcessingStatus,
+  ) {
+    await this.prisma.video.update({
+      where: { id: videoId },
+      data: {
+        status,
+        processedAt: status === 'Processed' ? new Date() : undefined,
+      },
+    });
+  }
+
   @OnEvent('cancel-processor', { async: true, promisify: true })
-  async handleStopProcessor(payload: { videoId: string }) {
+  async handleStopProcessor(payload: CancelProcessVideoDto) {
     const commands = [...this.runningCommands].filter((x) =>
       x[0].startsWith(`v-${payload.videoId}`),
     );

@@ -15,6 +15,8 @@ import { HealthModule } from './health/health.module';
         NODE_ENV: Joi.valid('development', 'production', 'test').required(),
         HTTP_HOST: Joi.string().required(),
         HTTP_PORT: Joi.number().required(),
+        CLIENT_URL: Joi.string().required(),
+        SERVICE_TOKEN: Joi.string().required(),
         REDIS_URL: Joi.string().required(),
         RABBITMQ_URL: Joi.string().required(),
         RABBITMQ_QUEUE: Joi.string().required(),
@@ -31,7 +33,7 @@ import { HealthModule } from './health/health.module';
       }),
     }),
     ProcessorModule,
-    HealthModule
+    HealthModule,
   ],
   providers: [
     {
