@@ -11,8 +11,7 @@ async function bootstrap() {
 
   app.set('trust proxy', true);
 
-  const configService = app.get(ConfigService);
-  app.enableCors({ origin: configService.getOrThrow<string>('CLIENT_URL') });
+  app.enableCors();
   app.enableVersioning({
     type: VersioningType.URI,
     prefix: 'v',
@@ -27,6 +26,7 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.enableShutdownHooks();
 
+  const configService = app.get(ConfigService);
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.RMQ,
     options: {
@@ -36,6 +36,7 @@ async function bootstrap() {
       queueOptions: {
         durable: false,
       },
+      noAck: false,
     },
   });
 

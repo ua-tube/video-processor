@@ -1,11 +1,12 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
-import { EventPattern, Payload } from '@nestjs/microservices';
+import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
 import { VideoProcessPayload } from './types';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CancelProcessVideoDto } from './dto';
 import { CancelProcessAuthGuard } from '../common/guards';
+import { ackMessage } from '../common/utils';
 
 @Controller('processor')
 export class ProcessorController {
@@ -16,8 +17,12 @@ export class ProcessorController {
   ) {}
 
   @EventPattern('process_video')
-  async handleVideoProcess(@Payload() payload: VideoProcessPayload) {
+  async handleVideoProcess(
+    @Payload() payload: VideoProcessPayload,
+    @Ctx() context: RmqContext,
+  ) {
     await this.processorQueue.add('process-video', payload);
+    ackMessage(context);
   }
 
   @UseGuards(CancelProcessAuthGuard)
