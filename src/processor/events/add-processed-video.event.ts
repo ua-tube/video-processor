@@ -1,18 +1,30 @@
 export class AddProcessedVideoEvent {
-  public readonly videoFileId: string;
-  public readonly videoId: string;
-  public readonly url: string;
-  public readonly label: string;
+  videoId: string;
+  videoFileId: string;
+  url: string;
+  label: string;
+  width: number;
+  height: number;
+  lengthSeconds: number | null;
+  size: string | number | bigint;
 
   constructor(
-    videoFileId: string,
     videoId: string,
+    videoFileId: string,
     url: string,
     label: string,
+    width: number,
+    height: number,
+    lengthSeconds: number | null,
+    size: string | number | bigint,
   ) {
-    this.videoFileId = videoFileId;
     this.videoId = videoId;
+    this.videoFileId = videoFileId;
     this.url = url;
     this.label = label;
+    this.width = width;
+    this.height = height;
+    this.lengthSeconds = lengthSeconds;
+    this.size = size;
   }
 }

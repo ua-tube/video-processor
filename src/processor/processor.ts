@@ -46,7 +46,7 @@ export class Processor {
     this.logger.log(`Job: (${job.name}), id: (${job.id}) completed`);
   }
 
-  @Process('process-video')
+  @Process({ name: 'process-video', concurrency: 3 })
   async processVideo(job: Job<VideoProcessPayload>) {
     await this.processorService.videoProcess(job.data);
   }

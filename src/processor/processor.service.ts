@@ -73,11 +73,12 @@ export class ProcessorService implements OnApplicationBootstrap {
     const { filePath, outputFolderPath, folderId } = await this.downloadVideo(
       payload.videoUrl,
     );
-    const videoMetadata = await this.probeVideo(filePath);
 
+    const videoMetadata = await this.probeVideo(filePath);
     const videoStream = videoMetadata.streams.find(
       (x) => x.codec_type === 'video',
     );
+    const format = videoMetadata.format;
 
     await this.prisma.video.create({
       data: {
@@ -111,7 +112,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     try {
       await Promise.all([
         this.updateVideoStatus(payload.videoId, 'ProcessingThumbnails'),
-        this.processPreview(payload, filePath, folderId, videoStream),
+        this.processPreview(payload, filePath, folderId, videoStream, format),
         this.processThumbnail(payload, filePath, folderId, videoStream),
       ]);
 
@@ -120,10 +121,13 @@ export class ProcessorService implements OnApplicationBootstrap {
         this.processVideo(payload, filePath, outputFolderPath, videoStream),
       ]);
 
-      this.logger.log(`Emit publish_video for videoId (${payload.videoId})`);
-      this.videoManagerClient.emit('publish_video', {
+      this.logger.log(
+        `Emit video_process_finished for videoId (${payload.videoId})`,
+      );
+      this.videoManagerClient.emit('video_process_finished', {
         videoId: payload.videoId,
       });
+      await this.removeTempFileOrFolder(outputFolderPath);
     } catch (e) {
       this.logger.error(e);
       await lastValueFrom(
@@ -133,8 +137,6 @@ export class ProcessorService implements OnApplicationBootstrap {
         }),
       );
     }
-
-    await this.removeTempFileOrFolder(outputFolderPath);
   }
 
   private async downloadVideo(videoUrl: string) {
@@ -267,13 +269,36 @@ export class ProcessorService implements OnApplicationBootstrap {
                   SERVICE_UPLOADED_VIDEO,
                 );
                 this.logger.log(`Video ${s.label} uploaded to storage.`);
-                await this.removeTempFileOrFolder(outputFilePath);
                 this.logger.log(
                   `Emit add_processed_video for video (${s.videoId})`,
                 );
+
+                const { streams, format } =
+                  await this.probeVideo(outputFilePath);
+
+                const lengthSeconds =
+                  s.label === '144p'
+                    ? Math.round(
+                        +(
+                          format?.duration ||
+                          streams?.[0]?.duration ||
+                          streams?.[1]?.duration
+                        ) || 0,
+                      )
+                    : null;
+
                 this.videoManagerClient.emit(
                   'add_processed_video',
-                  new AddProcessedVideoEvent(id, s.videoId, url, s.label),
+                  new AddProcessedVideoEvent(
+                    s.videoId,
+                    id,
+                    url,
+                    s.label,
+                    s.width,
+                    s.height,
+                    lengthSeconds,
+                    format?.size || 0,
+                  ),
                 );
                 resolve(true);
               })
@@ -289,7 +314,6 @@ export class ProcessorService implements OnApplicationBootstrap {
         }
       }
 
-      await this.removeTempFileOrFolder(filePath);
       resolve(true);
     });
   }
@@ -299,6 +323,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     filePath: string,
     folderId: string,
     videoStream: ffmpeg.FfprobeStream,
+    format: ffmpeg.FfprobeFormat,
   ) {
     return new Promise(async (resolve, reject) => {
       try {
@@ -320,8 +345,7 @@ export class ProcessorService implements OnApplicationBootstrap {
         width = Math.ceil((width / 2.0) * 2.0);
 
         let startPositionSeconds =
-          +videoStream.duration *
-          PreviewConfiguration.previewThumbnailStartPosition;
+          format.duration * PreviewConfiguration.previewThumbnailStartPosition;
         const lengthSeconds = Math.min(
           +videoStream.duration,
           PreviewConfiguration.previewThumbnailLengthSeconds,
@@ -362,7 +386,6 @@ export class ProcessorService implements OnApplicationBootstrap {
               this.logger.log(
                 `Video preview to video (${payload.videoId}) uploaded to storage.`,
               );
-              await this.removeTempFileOrFolder(outputThumbnailPath);
               this.logger.log(`Emit add_preview to video (${payload.videoId})`);
               this.videoManagerClient.emit(
                 'add_preview',
@@ -424,7 +447,6 @@ export class ProcessorService implements OnApplicationBootstrap {
                   payload.videoId,
                   SERVICE_UPLOADED_THUMBNAIL,
                 );
-                await this.removeTempFileOrFolder(path);
                 thumbnails.push({ imageFileId: id, url });
               }
               this.logger.log(`Thumbnails uploaded to storage.`);
@@ -502,7 +524,9 @@ export class ProcessorService implements OnApplicationBootstrap {
   }
 
   private toFFmpegTime(positionSeconds: number): string {
-    const timespan = new Date(positionSeconds * 1000);
+    const timespan = new Date(
+      positionSeconds && !isNaN(positionSeconds) ? positionSeconds * 1000 : 0,
+    );
     const hours = timespan.getUTCHours();
     const minutes = timespan.getUTCMinutes();
     const seconds = timespan.getUTCSeconds();
