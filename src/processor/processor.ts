@@ -48,6 +48,6 @@ export class Processor {
 
   @Process({ name: 'process-video', concurrency: 3 })
   async processVideo(job: Job<VideoProcessPayload>) {
-    await this.processorService.videoProcess(job.data);
+    await this.processorService.start(job.data);
   }
 }

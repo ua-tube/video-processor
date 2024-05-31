@@ -44,7 +44,7 @@ const streamFinished = promisify(finished);
 @Injectable()
 export class ProcessorService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProcessorService.name);
-  private runningCommands = new Map();
+  private readonly runningCommands = new Map();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -64,11 +64,15 @@ export class ProcessorService implements OnApplicationBootstrap {
       .catch(() => this.logger.error(`${VIDEO_MANAGER_SVC} connection failed`));
   }
 
-  async videoProcess(payload: VideoProcessPayload) {
+  async start(payload: VideoProcessPayload) {
     const videoProcessingStatus = await this.cacheManager.get(
       `v-${payload.videoId}-status`,
     );
-    if (videoProcessingStatus && videoProcessingStatus === 'canceled') return;
+
+    if (videoProcessingStatus && videoProcessingStatus === 'canceled') {
+      this.logger.warn(`Video (${payload.videoId}) process was canceled`);
+      return;
+    }
 
     const { filePath, outputFolderPath, folderId } = await this.downloadVideo(
       payload.videoUrl,
@@ -259,6 +263,29 @@ export class ProcessorService implements OnApplicationBootstrap {
                   where: { id: s.id },
                   data: { complete: true },
                 });
+
+                // TODO: HLS
+                const hlsFolder = join(outputFolderPath, s.label);
+                await mkdir(hlsFolder, { recursive: true });
+
+                ffmpeg(outputFilePath)
+                  .inputOption(this.buildInputOption())
+                  .outputOptions([
+                    `-c:v ${this.getHwaccelEncoder()}`,
+                    `-hls_time ${GeneratorConfiguration.hls.segmentTime}`,
+                    `-hls_playlist_type ${GeneratorConfiguration.hls.playlistType}`,
+                    `-hls_segment_filename ${join(hlsFolder, `${s.label}_%03d.ts`)}`,
+                  ])
+                  .output(join(hlsFolder, `${s.label}.m3u8`))
+                  .on('progress', (progress) => {
+                    this.logger.log('HLS progress');
+                    console.table(progress);
+                  })
+                  .on('end', () => {
+                    this.logger.log(`HLS generated`);
+                  })
+                  .run();
+
                 this.logger.log(
                   `Video ${s.label} processing finished, uploading to storage...`,
                 );
@@ -278,7 +305,7 @@ export class ProcessorService implements OnApplicationBootstrap {
 
                 const lengthSeconds =
                   s.label === '144p'
-                    ? Math.round(
+                    ? Math.floor(
                         +(
                           format?.duration ||
                           streams?.[0]?.duration ||
@@ -571,7 +598,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     });
   }
 
-  @OnEvent('cancel-processor', { async: true, promisify: true })
+  @OnEvent('cancel-process', { async: true, promisify: true })
   async handleStopProcessor(payload: CancelProcessVideoDto) {
     const commands = [...this.runningCommands].filter((x) =>
       x[0].startsWith(`v-${payload.videoId}`),

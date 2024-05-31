@@ -15,7 +15,7 @@ FROM node:20.11.0-slim
 
 WORKDIR /app
 
-RUN apt update && apt install libssl-dev ffmpeg libx264-dev -y --no-install-recommends
+RUN apt update && apt install curl libssl-dev ffmpeg libx264-dev -y --no-install-recommends
 
 COPY --chown=node:node --from=build /app/entrypoint.sh entrypoint.sh
 COPY --chown=node:node --from=build /app/prisma ./prisma

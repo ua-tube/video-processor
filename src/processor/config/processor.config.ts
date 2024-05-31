@@ -9,6 +9,10 @@ export const GeneratorConfiguration = {
     nvidia: 'h264_nvenc',
     appleSilicon: 'h264_videotoolbox',
   },
+  hls: {
+    segmentTime: 60,
+    playlistType: 'vod',
+  },
 };
 
 export const PreviewConfiguration = {
