@@ -1,7 +1,12 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../prisma';
 import { ProcessorController } from './processor.controller';
-import { ProcessorService } from './processor.service';
+import {
+  FfmpegService,
+  HlsService,
+  NetworkService,
+  ProcessorService,
+} from './services';
 import { BullModule } from '@nestjs/bull';
 import { ConfigService } from '@nestjs/config';
 import { Processor } from './processor';
@@ -10,6 +15,7 @@ import { VIDEO_MANAGER_SVC } from './constants';
 import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-yet';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ProcessorEventListener } from './events/listeners';
 
 @Module({
   imports: [
@@ -21,7 +27,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
       useFactory: async (configService: ConfigService) => ({
         store: await redisStore({
           url: configService.get<string>('REDIS_URL'),
-          ttl: 1000 * 3600 * 2,
+          ttl: 1000 * 3600 * 12,
         }),
         max: 5000,
       }),
@@ -52,6 +58,13 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     ]),
   ],
   controllers: [ProcessorController],
-  providers: [ProcessorService, Processor],
+  providers: [
+    FfmpegService,
+    HlsService,
+    NetworkService,
+    ProcessorService,
+    ProcessorEventListener,
+    Processor,
+  ],
 })
 export class ProcessorModule {}

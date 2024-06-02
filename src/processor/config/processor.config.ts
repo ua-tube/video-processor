@@ -1,13 +1,13 @@
-export const VideoProcessorConfiguration = {
+export const VIDEO_PROCESSOR_CONFIG = {
   retryDelayMs: 60000,
   maxRetryCount: 5,
 };
 
-export const GeneratorConfiguration = {
+export const GENERATOR_CONFIG = {
   hardwareAccelerator: 'auto',
   hardwareAccelerationEncoder: {
     nvidia: 'h264_nvenc',
-    appleSilicon: 'h264_videotoolbox',
+    apple: 'h264_videotoolbox',
   },
   hls: {
     segmentTime: 60,
@@ -15,13 +15,13 @@ export const GeneratorConfiguration = {
   },
 };
 
-export const PreviewConfiguration = {
+export const PREVIEW_CONFIG = {
   previewThumbnailHeight: 320,
   previewThumbnailStartPosition: 0.33,
   previewThumbnailLengthSeconds: 3.0,
 };
 
-export const VideoProcessingSteps = [
+export const RESOLUTIONS = [
   { label: '144p', height: 144, bitrate: 600 },
   { label: '240p', height: 240, bitrate: 1000 },
   { label: '360p', height: 360, bitrate: 1400 },

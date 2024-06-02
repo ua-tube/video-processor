@@ -4,55 +4,49 @@ import {
   Logger,
   OnApplicationBootstrap,
 } from '@nestjs/common';
-import axios from 'axios';
-import { ConfigService } from '@nestjs/config';
-import { createReadStream, createWriteStream } from 'node:fs';
 import { join } from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
-import { finished } from 'stream';
-import { promisify } from 'util';
-import ffmpeg from 'fluent-ffmpeg';
-import { VideoProcessPayload } from './types';
-import {
-  GeneratorConfiguration,
-  PreviewConfiguration,
-  VideoProcessingSteps,
-} from './config';
-import { PrismaService } from '../prisma';
+import { mkdir } from 'node:fs/promises';
+import { VideoProcessPayload } from '../types';
+import { PrismaService } from '../../prisma';
 import { VideoProcessingStatus, VideoProcessingStep } from '@prisma/client';
-import FormData from 'form-data';
 import { randomUUID } from 'node:crypto';
 import {
   SERVICE_UPLOADED_THUMBNAIL,
   SERVICE_UPLOADED_VIDEO,
   VIDEO_MANAGER_SVC,
-} from './constants';
+} from '../constants';
 import { ClientRMQ } from '@nestjs/microservices';
 import {
   AddPreviewEvent,
   AddProcessedVideoEvent,
   AddThumbnailEvent,
-} from './events';
+} from '../events';
 import { lastValueFrom } from 'rxjs';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
-import { OnEvent } from '@nestjs/event-emitter';
-import { CancelProcessVideoDto } from './dto';
-
-const streamFinished = promisify(finished);
+import { removeTempFileOrFolder } from '../utils';
+import { FfmpegService } from './ffmpeg.service';
+import { HlsService } from './hls.service';
+import { NetworkService } from './network.service';
+import { FfprobeFormat, FfprobeStream } from 'fluent-ffmpeg';
+import { PREVIEW_CONFIG, RESOLUTIONS } from '../config';
 
 @Injectable()
 export class ProcessorService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ProcessorService.name);
-  private readonly runningCommands = new Map();
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly configService: ConfigService,
     @Inject(VIDEO_MANAGER_SVC)
     private readonly videoManagerClient: ClientRMQ,
     @Inject(CACHE_MANAGER)
     private readonly cacheManager: Cache,
+    @Inject(FfmpegService)
+    private readonly ffmpegService: FfmpegService,
+    @Inject(HlsService)
+    private readonly hlsService: HlsService,
+    @Inject(NetworkService)
+    private readonly networkService: NetworkService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -74,15 +68,17 @@ export class ProcessorService implements OnApplicationBootstrap {
       return;
     }
 
-    const { filePath, outputFolderPath, folderId } = await this.downloadVideo(
-      payload.videoUrl,
-    );
+    const { filePath, outputFolderPath, folderId } =
+      await this.networkService.downloadVideo(payload.videoUrl);
 
-    const videoMetadata = await this.probeVideo(filePath);
+    const videoMetadata = await this.ffmpegService.probe(filePath);
     const videoStream = videoMetadata.streams.find(
       (x) => x.codec_type === 'video',
     );
     const format = videoMetadata.format;
+    const isHaveAudioTrack = videoMetadata.streams.some(
+      (x) => x.codec_type === 'audio',
+    );
 
     await this.prisma.video.create({
       data: {
@@ -122,7 +118,13 @@ export class ProcessorService implements OnApplicationBootstrap {
 
       await Promise.all([
         this.updateVideoStatus(payload.videoId, 'ProcessingVideos'),
-        this.processVideo(payload, filePath, outputFolderPath, videoStream),
+        this.processVideo(
+          payload,
+          filePath,
+          outputFolderPath,
+          videoStream,
+          isHaveAudioTrack,
+        ),
       ]);
 
       this.logger.log(
@@ -131,7 +133,7 @@ export class ProcessorService implements OnApplicationBootstrap {
       this.videoManagerClient.emit('video_process_finished', {
         videoId: payload.videoId,
       });
-      await this.removeTempFileOrFolder(outputFolderPath);
+      await removeTempFileOrFolder(outputFolderPath);
     } catch (e) {
       this.logger.error(e);
       await lastValueFrom(
@@ -143,76 +145,15 @@ export class ProcessorService implements OnApplicationBootstrap {
     }
   }
 
-  private async downloadVideo(videoUrl: string) {
-    const split = videoUrl.split('/').at(-1).split('.');
-    const outputFolderPath = join(process.cwd(), 'processor_output', split[0]);
-    const filePath = join(outputFolderPath, `video.${split[1]}`);
-
-    await mkdir(outputFolderPath, { recursive: true });
-
-    const writer = createWriteStream(filePath);
-
-    const response = await axios.get(
-      this.configService.get<string>('STORAGE_BASE_URL') + videoUrl,
-      { responseType: 'stream' },
-    );
-
-    response.data.pipe(writer);
-    await streamFinished(writer);
-
-    this.logger.log(`Video to processing downloaded from URI ${videoUrl}`);
-
-    return { filePath, outputFolderPath, folderId: split[0] };
-  }
-
-  private async uploadFile(
-    filePath: string,
-    type: 'videos' | 'images',
-    groupId: string,
-    category: string,
-  ) {
-    const formData = new FormData();
-
-    const stream = createReadStream(filePath);
-    formData.append('file', stream);
-
-    const videoId = randomUUID();
-    const { data } = await axios.post(
-      this.configService.get<string>('STORAGE_BASE_URL') +
-        `/api/v1/storage/${type}/internal`,
-      formData,
-      {
-        headers: {
-          token: this.configService.get<string>('STORAGE_SERVICE_TOKEN'),
-          'file-id': videoId,
-          'group-id': groupId,
-          category,
-          ...formData.getHeaders(),
-        },
-      },
-    );
-    return data;
-  }
-
-  private probeVideo(filePath: string): Promise<ffmpeg.FfprobeData> {
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, (err, data) => {
-        if (err) reject(err);
-        else resolve(data);
-      });
-    });
-  }
-
   private async processVideo(
     payload: VideoProcessPayload,
     filePath: string,
     outputFolderPath: string,
-    videoStream: ffmpeg.FfprobeStream,
+    videoStream: FfprobeStream,
+    isHaveAudioTrack: boolean,
   ) {
     return new Promise(async (resolve, reject) => {
-      const steps = VideoProcessingSteps.filter(
-        (x) => x.height <= videoStream.height,
-      );
+      const steps = RESOLUTIONS.filter((x) => x.height <= videoStream.height);
 
       const processingSteps: VideoProcessingStep[] = [];
       for (const s of steps) {
@@ -248,11 +189,16 @@ export class ProcessorService implements OnApplicationBootstrap {
         try {
           const outputFilePath = join(outputFolderPath, `${s.label}.mp4`);
           await new Promise((resolve, reject) => {
-            const cmd = ffmpeg(filePath);
+            const cmd = this.ffmpegService.ffmpeg(filePath);
             cmd
-              .inputOption(this.buildInputOption())
+              .inputOption(this.ffmpegService.buildInputOption())
               .outputOption(
-                this.buildTranscodeOutputOption(s.width, s.height, s.bitrate),
+                this.ffmpegService.buildTranscodeOutputOption(
+                  s.width,
+                  s.height,
+                  s.bitrate,
+                  isHaveAudioTrack,
+                ),
               )
               .output(outputFilePath)
               .on('error', (err: any) => {
@@ -268,76 +214,70 @@ export class ProcessorService implements OnApplicationBootstrap {
                 const hlsFolder = join(outputFolderPath, s.label);
                 await mkdir(hlsFolder, { recursive: true });
 
-                ffmpeg(outputFilePath)
-                  .inputOption(this.buildInputOption())
-                  .outputOptions([
-                    `-c:v ${this.getHwaccelEncoder()}`,
-                    `-hls_time ${GeneratorConfiguration.hls.segmentTime}`,
-                    `-hls_playlist_type ${GeneratorConfiguration.hls.playlistType}`,
-                    `-hls_segment_filename ${join(hlsFolder, `${s.label}_%03d.ts`)}`,
-                  ])
+                this.ffmpegService
+                  .ffmpeg(outputFilePath)
+                  .inputOption(this.ffmpegService.buildInputOption())
+                  .outputOptions(
+                    this.ffmpegService.buildHlsOutputOptions(
+                      hlsFolder,
+                      s.label,
+                    ),
+                  )
                   .output(join(hlsFolder, `${s.label}.m3u8`))
-                  .on('progress', (progress) => {
-                    this.logger.log('HLS progress');
-                    console.table(progress);
-                  })
-                  .on('end', () => {
-                    this.logger.log(`HLS generated`);
+                  .on('end', async () => {
+                    this.logger.log(`HLS for ${s.label} generated`);
+
+                    const {} = await this.networkService.uploadHls(
+                      outputFilePath,
+                      s.videoId,
+                      SERVICE_UPLOADED_VIDEO,
+                    );
+
+                    this.logger.log(`HLS ${s.label} uploaded to storage.`);
+                    this.logger.log(
+                      `Emit add_processed_video for video (${s.videoId})`,
+                    );
+
+                    const { streams, format } =
+                      await this.ffmpegService.probe(outputFilePath);
+
+                    const lengthSeconds =
+                      s.label === '144p'
+                        ? Math.floor(
+                            Number(
+                              format?.duration ||
+                                streams?.[0]?.duration ||
+                                streams?.[1]?.duration,
+                            ) || 0,
+                          )
+                        : null;
+
+                    // this.videoManagerClient.emit(
+                    //   'add_processed_video',
+                    //   new AddProcessedVideoEvent(
+                    //     s.videoId,
+                    //     id,
+                    //     url,
+                    //     s.label,
+                    //     s.width,
+                    //     s.height,
+                    //     lengthSeconds,
+                    //     format?.size || 0,
+                    //   ),
+                    // );
+                    resolve(true);
                   })
                   .run();
-
-                this.logger.log(
-                  `Video ${s.label} processing finished, uploading to storage...`,
-                );
-                const { id, url } = await this.uploadFile(
-                  outputFilePath,
-                  'videos',
-                  s.videoId,
-                  SERVICE_UPLOADED_VIDEO,
-                );
-                this.logger.log(`Video ${s.label} uploaded to storage.`);
-                this.logger.log(
-                  `Emit add_processed_video for video (${s.videoId})`,
-                );
-
-                const { streams, format } =
-                  await this.probeVideo(outputFilePath);
-
-                const lengthSeconds =
-                  s.label === '144p'
-                    ? Math.floor(
-                        +(
-                          format?.duration ||
-                          streams?.[0]?.duration ||
-                          streams?.[1]?.duration
-                        ) || 0,
-                      )
-                    : null;
-
-                this.videoManagerClient.emit(
-                  'add_processed_video',
-                  new AddProcessedVideoEvent(
-                    s.videoId,
-                    id,
-                    url,
-                    s.label,
-                    s.width,
-                    s.height,
-                    lengthSeconds,
-                    format?.size || 0,
-                  ),
-                );
-                resolve(true);
               })
               .run();
 
-            this.runningCommands.set(`v-${s.videoId}-${s.label}`, cmd);
+            this.ffmpegService.setCommand(`v-${s.videoId}-${s.label}`, cmd);
           });
         } catch (e) {
           this.logger.error(e);
           reject(e);
         } finally {
-          this.runningCommands.delete(`v-${s.videoId}-${s.label}`);
+          this.ffmpegService.deleteCommand(`v-${s.videoId}-${s.label}`);
         }
       }
 
@@ -349,8 +289,8 @@ export class ProcessorService implements OnApplicationBootstrap {
     payload: VideoProcessPayload,
     filePath: string,
     folderId: string,
-    videoStream: ffmpeg.FfprobeStream,
-    format: ffmpeg.FfprobeFormat,
+    videoStream: FfprobeStream,
+    format: FfprobeFormat,
   ) {
     return new Promise(async (resolve, reject) => {
       try {
@@ -364,7 +304,7 @@ export class ProcessorService implements OnApplicationBootstrap {
 
         const height = Math.min(
           videoStream.height,
-          PreviewConfiguration.previewThumbnailHeight,
+          PREVIEW_CONFIG.previewThumbnailHeight,
         );
         let width = Math.ceil(
           height * (videoStream.width / videoStream.height),
@@ -372,24 +312,24 @@ export class ProcessorService implements OnApplicationBootstrap {
         width = Math.ceil((width / 2.0) * 2.0);
 
         let startPositionSeconds =
-          format.duration * PreviewConfiguration.previewThumbnailStartPosition;
+          format.duration * PREVIEW_CONFIG.previewThumbnailStartPosition;
         const lengthSeconds = Math.min(
           +videoStream.duration,
-          PreviewConfiguration.previewThumbnailLengthSeconds,
+          PREVIEW_CONFIG.previewThumbnailLengthSeconds,
         );
         if (
           +videoStream.duration - startPositionSeconds <
-          PreviewConfiguration.previewThumbnailLengthSeconds
+          PREVIEW_CONFIG.previewThumbnailLengthSeconds
         ) {
           startPositionSeconds = 0.0;
         }
 
         await new Promise((resolve, reject) => {
-          const cmd = ffmpeg(filePath);
+          const cmd = this.ffmpegService.ffmpeg(filePath);
           cmd
-            .inputOption(this.buildInputOption())
+            .inputOption(this.ffmpegService.buildInputOption())
             .outputOption(
-              this.buildPreviewOutputOption(
+              this.ffmpegService.buildPreviewOutputOption(
                 width,
                 height,
                 startPositionSeconds,
@@ -404,9 +344,8 @@ export class ProcessorService implements OnApplicationBootstrap {
               this.logger.log(
                 `Video preview (${thumbnailId}) processing finished, uploading to storage...`,
               );
-              const { id, url } = await this.uploadFile(
+              const { id, url } = await this.networkService.uploadImage(
                 outputThumbnailPath,
-                'images',
                 payload.videoId,
                 SERVICE_UPLOADED_THUMBNAIL,
               );
@@ -422,7 +361,7 @@ export class ProcessorService implements OnApplicationBootstrap {
             })
             .run();
 
-          this.runningCommands.set(`v-${payload.videoId}-preview`, cmd);
+          this.ffmpegService.setCommand(`v-${payload.videoId}-preview`, cmd);
         });
         resolve(true);
       } catch (e) {
@@ -430,7 +369,7 @@ export class ProcessorService implements OnApplicationBootstrap {
         this.videoManagerClient.emit('preview_generate_failed', payload);
         reject(e);
       } finally {
-        this.runningCommands.delete(`v-${payload.videoId}-preview`);
+        this.ffmpegService.deleteCommand(`v-${payload.videoId}-preview`);
       }
     });
   }
@@ -439,7 +378,7 @@ export class ProcessorService implements OnApplicationBootstrap {
     payload: VideoProcessPayload,
     filePath: string,
     folderId: string,
-    videoStream: ffmpeg.FfprobeStream,
+    videoStream: FfprobeStream,
   ) {
     return new Promise(async (resolve, reject) => {
       try {
@@ -455,7 +394,7 @@ export class ProcessorService implements OnApplicationBootstrap {
         width = Math.ceil((width / 2.0) * 2.0);
 
         await new Promise((resolve, reject) => {
-          const cmd = ffmpeg(filePath);
+          const cmd = this.ffmpegService.ffmpeg(filePath);
           cmd
             .on('error', (err: any) => {
               reject(err);
@@ -467,23 +406,25 @@ export class ProcessorService implements OnApplicationBootstrap {
 
               const thumbnails: any[] = [];
               for (let i = 1; i <= 3; i++) {
-                const path = join(outputFilePath, `tn_${i}.png`);
-                const { id, url } = await this.uploadFile(
-                  path,
-                  'images',
+                const filePath = join(outputFilePath, `tn_${i}.png`);
+                const { id, url } = await this.networkService.uploadImage(
+                  filePath,
                   payload.videoId,
                   SERVICE_UPLOADED_THUMBNAIL,
                 );
                 thumbnails.push({ imageFileId: id, url });
               }
+
               this.logger.log(`Thumbnails uploaded to storage.`);
               this.logger.log(
                 `Emit add_thumbnails to video (${payload.videoId})`,
               );
+
               this.videoManagerClient.emit(
                 'add_thumbnails',
                 new AddThumbnailEvent(payload.videoId, thumbnails),
               );
+
               resolve(true);
             })
             .thumbnails({
@@ -494,95 +435,17 @@ export class ProcessorService implements OnApplicationBootstrap {
               timemarks: ['10%', '25%', '50%'],
             });
 
-          this.runningCommands.set(`v-${payload.videoId}-thumbnails`, cmd);
+          this.ffmpegService.setCommand(`v-${payload.videoId}-thumbnails`, cmd);
         });
       } catch (e) {
         this.logger.error(e);
         this.videoManagerClient.emit('thumbnails_generate_failed', payload);
         reject(e);
       } finally {
-        this.runningCommands.delete(`v-${payload.videoId}-thumbnails`);
+        this.ffmpegService.deleteCommand(`v-${payload.videoId}-thumbnails`);
       }
       resolve(true);
     });
-  }
-
-  private buildInputOption() {
-    const args: string[] = [];
-
-    if (this.configService.get<boolean>('HWACCEL_ENABLED')) {
-      args.push(`-hwaccel ${GeneratorConfiguration.hardwareAccelerator}`);
-    }
-
-    return args;
-  }
-
-  private buildTranscodeOutputOption(
-    width: number,
-    height: number,
-    bitrate: number,
-  ) {
-    const args: string[] = [];
-
-    args.push(`-s ${width}x${height}`);
-    args.push(`-b:v ${bitrate}k`);
-    args.push('-c:a aac');
-    args.push(`-c:v ${this.getHwaccelEncoder()}`);
-
-    return args;
-  }
-
-  private buildPreviewOutputOption(
-    width: number,
-    height: number,
-    startPositionSeconds: number,
-    lengthSeconds: number,
-  ) {
-    const args: string[] = [];
-
-    args.push(`-s ${width}x${height}`);
-    args.push('-r 12.000');
-    args.push('-loop 0');
-    args.push('-c:v webp');
-    args.push(`-ss ${this.toFFmpegTime(startPositionSeconds)}`);
-    args.push(`-t ${this.toFFmpegTime(lengthSeconds)}`);
-
-    return args;
-  }
-
-  private toFFmpegTime(positionSeconds: number): string {
-    const timespan = new Date(
-      positionSeconds && !isNaN(positionSeconds) ? positionSeconds * 1000 : 0,
-    );
-    const hours = timespan.getUTCHours();
-    const minutes = timespan.getUTCMinutes();
-    const seconds = timespan.getUTCSeconds();
-    const milliseconds = timespan.getUTCMilliseconds();
-
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
-  }
-
-  private getHwaccelEncoder() {
-    const hwaccelEnabled = this.configService.get<boolean>('HWACCEL_ENABLED');
-
-    if (hwaccelEnabled) {
-      const vendorName = this.configService.get('GPU_VENDOR');
-      switch (vendorName) {
-        case 'apple':
-          return GeneratorConfiguration.hardwareAccelerationEncoder
-            .appleSilicon;
-        case 'nvidia':
-          return GeneratorConfiguration.hardwareAccelerationEncoder.nvidia;
-        case 'intel':
-        case 'amd':
-      }
-    }
-
-    return 'h264';
-  }
-
-  private async removeTempFileOrFolder(path: string) {
-    await rm(path, { recursive: true, force: true });
   }
 
   private async updateVideoStatus(
@@ -596,24 +459,5 @@ export class ProcessorService implements OnApplicationBootstrap {
         processedAt: status === 'Processed' ? new Date() : undefined,
       },
     });
-  }
-
-  @OnEvent('cancel-process', { async: true, promisify: true })
-  async handleStopProcessor(payload: CancelProcessVideoDto) {
-    const commands = [...this.runningCommands].filter((x) =>
-      x[0].startsWith(`v-${payload.videoId}`),
-    );
-
-    commands.forEach((cmd) => {
-      cmd[1].kill('SIGKILL');
-      this.runningCommands.delete(cmd[0]);
-    });
-
-    await Promise.all([
-      this.prisma.video.delete({ where: { id: payload.videoId } }),
-      this.removeTempFileOrFolder(
-        join(process.cwd(), 'processor_output', payload.videoId),
-      ),
-    ]);
   }
 }

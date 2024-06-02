@@ -7,8 +7,8 @@ import {
   Processor as BullProcessor,
 } from '@nestjs/bull';
 import { Job } from 'bull';
-import { VideoProcessorConfiguration } from './config';
-import { ProcessorService } from './processor.service';
+import { VIDEO_PROCESSOR_CONFIG } from './config';
+import { ProcessorService } from './services';
 import { VideoProcessPayload } from './types';
 
 @Injectable()
@@ -26,9 +26,9 @@ export class Processor {
   @OnQueueFailed()
   async onFailed(job: Job) {
     this.logger.error(`Job: (${job.name}), id: (${job.id}) failed`);
-    if (job.attemptsMade < VideoProcessorConfiguration.maxRetryCount) {
+    if (job.attemptsMade < VIDEO_PROCESSOR_CONFIG.maxRetryCount) {
       await new Promise((resolve) =>
-        setTimeout(resolve, VideoProcessorConfiguration.retryDelayMs),
+        setTimeout(resolve, VIDEO_PROCESSOR_CONFIG.retryDelayMs),
       );
       this.logger.log(
         `Job: (${job.name}), id: (${job.id}) attempt #${job.attemptsMade + 1} started`,
