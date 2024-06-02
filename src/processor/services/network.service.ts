@@ -78,7 +78,7 @@ export class NetworkService {
     if (!masterFilename || !hlsFilenames.length) return;
 
     const hlsId = randomUUID();
-    const generatedMasterFilename = await this.uploadHlsMaster(
+    await this.uploadHlsMaster(
       join(folderPath, masterFilename),
       groupId,
       hlsId,
@@ -108,10 +108,7 @@ export class NetworkService {
       );
     }
 
-    return {
-      url: `/videos/${SERVICE_UPLOADED_VIDEO}/${groupId}/${hlsId}/${generatedMasterFilename}`,
-      hlsId
-    }
+    return hlsId;
   }
 
   async uploadImage(filePath: string, groupId: string, category: string) {

@@ -10,7 +10,7 @@ export const GENERATOR_CONFIG = {
     apple: 'h264_videotoolbox',
   },
   hls: {
-    segmentTime: 60,
+    segmentTime: 5,
     playlistType: 'vod',
   },
 };

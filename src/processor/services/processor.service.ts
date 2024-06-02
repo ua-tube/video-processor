@@ -222,7 +222,7 @@ export class ProcessorService implements OnApplicationBootstrap {
                   .on('end', async () => {
                     this.logger.log(`HLS for ${s.label} generated`);
 
-                    const { url, hlsId } = await this.networkService.uploadHls(
+                    const hlsId = await this.networkService.uploadHls(
                       hlsFolder,
                       s.videoId,
                     );
@@ -250,12 +250,8 @@ export class ProcessorService implements OnApplicationBootstrap {
                       'add_processed_video',
                       new AddProcessedVideoEvent(
                         s.videoId,
-                        url,
                         s.label,
-                        s.width,
-                        s.height,
                         lengthSeconds,
-                        format?.size || 0,
                       ),
                     );
 
@@ -263,6 +259,16 @@ export class ProcessorService implements OnApplicationBootstrap {
                       ...s,
                       hlsId,
                     });
+
+                    const masterFilePath = await this.hlsService.writePlaylist(
+                      outputFolderPath,
+                      playlistProcessingSteps,
+                    );
+                    await this.networkService.uploadHlsMaster(
+                      masterFilePath,
+                      payload.videoId,
+                    );
+
                     resolve(true);
                   })
                   .run();
@@ -278,15 +284,6 @@ export class ProcessorService implements OnApplicationBootstrap {
           this.ffmpegService.deleteCommand(`v-${s.videoId}-${s.label}`);
         }
       }
-
-      const masterFilePath = await this.hlsService.writePlaylist(
-        outputFolderPath,
-        playlistProcessingSteps,
-      );
-      await this.networkService.uploadHlsMaster(
-        masterFilePath,
-        payload.videoId,
-      );
 
       resolve(true);
     });
