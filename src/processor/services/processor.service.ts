@@ -6,15 +6,11 @@ import {
 } from '@nestjs/common';
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import { VideoProcessPayload } from '../types';
+import { PlaylistProcessingStep, VideoProcessPayload } from '../types';
 import { PrismaService } from '../../prisma';
 import { VideoProcessingStatus, VideoProcessingStep } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
-import {
-  SERVICE_UPLOADED_THUMBNAIL,
-  SERVICE_UPLOADED_VIDEO,
-  VIDEO_MANAGER_SVC,
-} from '../constants';
+import { SERVICE_UPLOADED_THUMBNAIL, VIDEO_MANAGER_SVC } from '../constants';
 import { ClientRMQ } from '@nestjs/microservices';
 import {
   AddPreviewEvent,
@@ -177,6 +173,7 @@ export class ProcessorService implements OnApplicationBootstrap {
       }
 
       await this.cacheManager.set(`v-${payload.videoId}-status`, 'work');
+      const playlistProcessingSteps: PlaylistProcessingStep[] = [];
 
       for (const s of processingSteps) {
         const videoProcessorStatus = await this.cacheManager.get(
@@ -210,10 +207,8 @@ export class ProcessorService implements OnApplicationBootstrap {
                   data: { complete: true },
                 });
 
-                // TODO: HLS
                 const hlsFolder = join(outputFolderPath, s.label);
                 await mkdir(hlsFolder, { recursive: true });
-
                 this.ffmpegService
                   .ffmpeg(outputFilePath)
                   .inputOption(this.ffmpegService.buildInputOption())
@@ -227,10 +222,9 @@ export class ProcessorService implements OnApplicationBootstrap {
                   .on('end', async () => {
                     this.logger.log(`HLS for ${s.label} generated`);
 
-                    const {} = await this.networkService.uploadHls(
-                      outputFilePath,
+                    const { url, hlsId } = await this.networkService.uploadHls(
+                      hlsFolder,
                       s.videoId,
-                      SERVICE_UPLOADED_VIDEO,
                     );
 
                     this.logger.log(`HLS ${s.label} uploaded to storage.`);
@@ -252,19 +246,23 @@ export class ProcessorService implements OnApplicationBootstrap {
                           )
                         : null;
 
-                    // this.videoManagerClient.emit(
-                    //   'add_processed_video',
-                    //   new AddProcessedVideoEvent(
-                    //     s.videoId,
-                    //     id,
-                    //     url,
-                    //     s.label,
-                    //     s.width,
-                    //     s.height,
-                    //     lengthSeconds,
-                    //     format?.size || 0,
-                    //   ),
-                    // );
+                    this.videoManagerClient.emit(
+                      'add_processed_video',
+                      new AddProcessedVideoEvent(
+                        s.videoId,
+                        url,
+                        s.label,
+                        s.width,
+                        s.height,
+                        lengthSeconds,
+                        format?.size || 0,
+                      ),
+                    );
+
+                    playlistProcessingSteps.push({
+                      ...s,
+                      hlsId,
+                    });
                     resolve(true);
                   })
                   .run();
@@ -280,6 +278,15 @@ export class ProcessorService implements OnApplicationBootstrap {
           this.ffmpegService.deleteCommand(`v-${s.videoId}-${s.label}`);
         }
       }
+
+      const masterFilePath = await this.hlsService.writePlaylist(
+        outputFolderPath,
+        playlistProcessingSteps,
+      );
+      await this.networkService.uploadHlsMaster(
+        masterFilePath,
+        payload.videoId,
+      );
 
       resolve(true);
     });

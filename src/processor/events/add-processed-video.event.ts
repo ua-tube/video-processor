@@ -1,6 +1,5 @@
 export class AddProcessedVideoEvent {
   videoId: string;
-  videoFileId: string;
   url: string;
   label: string;
   width: number;
@@ -10,7 +9,6 @@ export class AddProcessedVideoEvent {
 
   constructor(
     videoId: string,
-    videoFileId: string,
     url: string,
     label: string,
     width: number,
@@ -19,7 +17,6 @@ export class AddProcessedVideoEvent {
     size: string | number | bigint,
   ) {
     this.videoId = videoId;
-    this.videoFileId = videoFileId;
     this.url = url;
     this.label = label;
     this.width = width;

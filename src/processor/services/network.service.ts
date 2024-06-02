@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { finished } from 'stream';
 import { randomUUID } from 'node:crypto';
 import FormData from 'form-data';
+import { SERVICE_UPLOADED_VIDEO } from '../constants';
 
 @Injectable()
 export class NetworkService {
@@ -38,7 +39,31 @@ export class NetworkService {
     return { filePath, outputFolderPath, folderId };
   }
 
-  async uploadHls(folderPath: string, groupId: string, category: string) {
+  async uploadHlsMaster(filePath: string, groupId: string, hlsId?: string) {
+    const masterFormData = new FormData();
+
+    const masterReadStream = createReadStream(filePath);
+    masterFormData.append('file', masterReadStream);
+
+    const { data } = await axios.post<{ filename: string }>(
+      this.configService.get<string>('STORAGE_BASE_URL') +
+        `/api/v1/storage/videos/internal/hls/master`,
+      masterFormData,
+      {
+        headers: {
+          token: this.configService.get<string>('STORAGE_SERVICE_TOKEN'),
+          'group-id': groupId,
+          ...(hlsId && { 'hls-id': hlsId }),
+          category: SERVICE_UPLOADED_VIDEO,
+          ...masterFormData.getHeaders(),
+        },
+      },
+    );
+
+    return data.filename;
+  }
+
+  async uploadHls(folderPath: string, groupId: string) {
     const filenames = await readdir(folderPath);
 
     if (!filenames || !filenames.length) return;
@@ -52,29 +77,17 @@ export class NetworkService {
 
     if (!masterFilename || !hlsFilenames.length) return;
 
-    const masterFormData = new FormData();
-
-    const masterReadStream = createReadStream(join(folderPath, masterFilename));
-    masterFormData.append('file', masterReadStream);
-
-    await axios.post(
-      this.configService.get<string>('STORAGE_BASE_URL') +
-        `/api/v1/storage/videos/internal/hls/master`,
-      masterFilename,
-      {
-        headers: {
-          token: this.configService.get<string>('STORAGE_SERVICE_TOKEN'),
-          'group-id': groupId,
-          category,
-          ...masterFormData.getHeaders(),
-        },
-      },
+    const hlsId = randomUUID();
+    const generatedMasterFilename = await this.uploadHlsMaster(
+      join(folderPath, masterFilename),
+      groupId,
+      hlsId,
     );
 
-    const hlsId = randomUUID();
-    for (let start = 0; start < hlsFilenames.length; start += 50) {
+    const step = 500;
+    for (let start = 0; start < hlsFilenames.length; start += step) {
       const hlsFormData = new FormData();
-      hlsFilenames.slice(start, start + 50).forEach((hlsFilename) => {
+      hlsFilenames.slice(start, start + step).forEach((hlsFilename) => {
         const hlsReadStream = createReadStream(join(folderPath, hlsFilename));
         hlsFormData.append('files', hlsReadStream);
       });
@@ -88,11 +101,16 @@ export class NetworkService {
             token: this.configService.get<string>('STORAGE_SERVICE_TOKEN'),
             'group-id': groupId,
             'hls-id': hlsId,
-            category,
+            category: SERVICE_UPLOADED_VIDEO,
             ...hlsFormData.getHeaders(),
           },
         },
       );
+    }
+
+    return {
+      url: `/videos/${SERVICE_UPLOADED_VIDEO}/${groupId}/${hlsId}/${generatedMasterFilename}`,
+      hlsId
     }
   }
 
