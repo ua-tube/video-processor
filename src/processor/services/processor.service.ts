@@ -185,7 +185,10 @@ export class ProcessorService implements OnApplicationBootstrap {
 
         try {
           const outputFilePath = join(outputFolderPath, `${s.label}.mp4`);
-          await new Promise((resolve, reject) => {
+          await new Promise(async (resolve, reject) => {
+            const hlsFolder = join(outputFolderPath, s.label);
+            await mkdir(hlsFolder, { recursive: true });
+
             const cmd = this.ffmpegService.ffmpeg(filePath);
             cmd
               .inputOption(this.ffmpegService.buildInputOption())
@@ -195,83 +198,68 @@ export class ProcessorService implements OnApplicationBootstrap {
                   s.height,
                   s.bitrate,
                   isHaveAudioTrack,
+                  hlsFolder,
+                  s.label,
                 ),
               )
-              .output(outputFilePath)
+              .output(join(hlsFolder, `${s.label}.m3u8`))
               .on('error', (err: any) => {
                 reject(err);
               })
               .on('end', async () => {
+                this.logger.log(`HLS for ${s.label} generated, uploading...`);
+
+                const hlsId = await this.networkService.uploadHls(
+                  hlsFolder,
+                  s.videoId,
+                );
+
+                this.logger.log(`HLS ${s.label} uploaded to storage.`);
+                this.logger.log(
+                  `Emit add_processed_video for video (${s.videoId})`,
+                );
+
+                const { streams, format } =
+                  await this.ffmpegService.probe(outputFilePath);
+
+                const lengthSeconds =
+                  s.label === '144p'
+                    ? Math.floor(
+                        Number(
+                          format?.duration ||
+                            streams?.[0]?.duration ||
+                            streams?.[1]?.duration,
+                        ) || 0,
+                      )
+                    : null;
+
+                this.videoManagerClient.emit(
+                  'add_processed_video',
+                  new AddProcessedVideoEvent(s.videoId, s.label, lengthSeconds),
+                );
+
+                playlistProcessingSteps.push({
+                  ...s,
+                  hlsId,
+                });
+
+                const masterFilePath = await this.hlsService.writePlaylist(
+                  outputFolderPath,
+                  playlistProcessingSteps,
+                );
+                await this.networkService.uploadHlsMaster(
+                  masterFilePath,
+                  payload.videoId,
+                );
+
                 await this.prisma.videoProcessingStep.update({
                   where: { id: s.id },
                   data: { complete: true },
                 });
 
-                const hlsFolder = join(outputFolderPath, s.label);
-                await mkdir(hlsFolder, { recursive: true });
-                this.ffmpegService
-                  .ffmpeg(outputFilePath)
-                  .inputOption(this.ffmpegService.buildInputOption())
-                  .outputOptions(
-                    this.ffmpegService.buildHlsOutputOptions(
-                      hlsFolder,
-                      s.label,
-                    ),
-                  )
-                  .output(join(hlsFolder, `${s.label}.m3u8`))
-                  .on('end', async () => {
-                    this.logger.log(`HLS for ${s.label} generated`);
+                this.logger.log(`Step ${s.label} is complete`);
 
-                    const hlsId = await this.networkService.uploadHls(
-                      hlsFolder,
-                      s.videoId,
-                    );
-
-                    this.logger.log(`HLS ${s.label} uploaded to storage.`);
-                    this.logger.log(
-                      `Emit add_processed_video for video (${s.videoId})`,
-                    );
-
-                    const { streams, format } =
-                      await this.ffmpegService.probe(outputFilePath);
-
-                    const lengthSeconds =
-                      s.label === '144p'
-                        ? Math.floor(
-                            Number(
-                              format?.duration ||
-                                streams?.[0]?.duration ||
-                                streams?.[1]?.duration,
-                            ) || 0,
-                          )
-                        : null;
-
-                    this.videoManagerClient.emit(
-                      'add_processed_video',
-                      new AddProcessedVideoEvent(
-                        s.videoId,
-                        s.label,
-                        lengthSeconds,
-                      ),
-                    );
-
-                    playlistProcessingSteps.push({
-                      ...s,
-                      hlsId,
-                    });
-
-                    const masterFilePath = await this.hlsService.writePlaylist(
-                      outputFolderPath,
-                      playlistProcessingSteps,
-                    );
-                    await this.networkService.uploadHlsMaster(
-                      masterFilePath,
-                      payload.videoId,
-                    );
-
-                    resolve(true);
-                  })
-                  .run();
+                resolve(true);
               })
               .run();
 

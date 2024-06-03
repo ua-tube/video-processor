@@ -46,11 +46,16 @@ export class FfmpegService {
     height: number,
     bitrate: number,
     videoHaveAudioTrack: boolean,
+    hlsFolder: string,
+    label: string,
   ) {
     const args: string[] = [
       `-s ${width}x${height}`,
       `-b:v ${bitrate}k`,
       `-c:v ${this.getHwaccelEncoder()}`,
+      `-hls_time ${GENERATOR_CONFIG.hls.segmentTime}`,
+      `-hls_playlist_type ${GENERATOR_CONFIG.hls.playlistType}`,
+      `-hls_segment_filename ${join(hlsFolder, `${label}_%04d.ts`)}`,
     ];
     return videoHaveAudioTrack ? [...args, '-c:a aac'] : args;
   }
