@@ -71,10 +71,10 @@ export class ProcessorService implements OnApplicationBootstrap {
     const videoStream = videoMetadata.streams.find(
       (x) => x.codec_type === 'video',
     );
-    const format = videoMetadata.format;
-    const isHaveAudioTrack = videoMetadata.streams.some(
+    const audioStream = videoMetadata.streams.find(
       (x) => x.codec_type === 'audio',
     );
+    const format = videoMetadata.format;
 
     await this.prisma.video.create({
       data: {
@@ -119,7 +119,8 @@ export class ProcessorService implements OnApplicationBootstrap {
           filePath,
           outputFolderPath,
           videoStream,
-          isHaveAudioTrack,
+          audioStream,
+          format,
         ),
       ]);
 
@@ -146,7 +147,8 @@ export class ProcessorService implements OnApplicationBootstrap {
     filePath: string,
     outputFolderPath: string,
     videoStream: FfprobeStream,
-    isHaveAudioTrack: boolean,
+    audioStream: FfprobeStream,
+    format: FfprobeFormat,
   ) {
     return new Promise(async (resolve, reject) => {
       const steps = RESOLUTIONS.filter((x) => x.height <= videoStream.height);
@@ -184,7 +186,6 @@ export class ProcessorService implements OnApplicationBootstrap {
         }
 
         try {
-          const outputFilePath = join(outputFolderPath, `${s.label}.mp4`);
           await new Promise(async (resolve, reject) => {
             const hlsFolder = join(outputFolderPath, s.label);
             await mkdir(hlsFolder, { recursive: true });
@@ -197,7 +198,7 @@ export class ProcessorService implements OnApplicationBootstrap {
                   s.width,
                   s.height,
                   s.bitrate,
-                  isHaveAudioTrack,
+                  !!audioStream,
                   hlsFolder,
                   s.label,
                 ),
@@ -219,16 +220,13 @@ export class ProcessorService implements OnApplicationBootstrap {
                   `Emit add_processed_video for video (${s.videoId})`,
                 );
 
-                const { streams, format } =
-                  await this.ffmpegService.probe(outputFilePath);
-
                 const lengthSeconds =
                   s.label === '144p'
                     ? Math.floor(
                         Number(
                           format?.duration ||
-                            streams?.[0]?.duration ||
-                            streams?.[1]?.duration,
+                            videoStream?.duration ||
+                            audioStream?.duration,
                         ) || 0,
                       )
                     : null;
